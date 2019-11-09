@@ -69,71 +69,74 @@ emptyLeaf :: Int -> Bounds2D -> QTree a
 emptyLeaf = Tree $ Leaf []
 
 emptyNode :: Int -> Bounds2D -> QTree a
-emptyNode capacity region = Tree node capacity region
+emptyNode capacity region = Tree (Node nw ne sw se) capacity region
   where [nw, ne, sw, se] = map (emptyLeaf capacity) $ subdivide region
-        node = Node nw ne sw se
 
 
 insert :: QTree a -> (a, Point) -> QTree a
 insert qt@(Tree tree capacity region) d@(obj,xy)
-  | region `contains` xy =
-    case tree of
-      Node nw ne sw se ->
-        case findQuadrant region xy of
-          NW   -> qt { tree = tree { nw = insert nw d } }
-          NE   -> qt { tree = tree { ne = insert ne d } }
-          SW   -> qt { tree = tree { sw = insert sw d } }
-          SE   -> qt { tree = tree { se = insert se d } }
-      Leaf dat -> qt { tree = Leaf (d:dat) }
-  | otherwise   = qt
+  | not (region `contains` xy) = qt
+  | otherwise = case tree of
+    Leaf dat         -> qt { tree = Leaf (d:dat) }
+    Node nw ne sw se ->
+      case findQuadrant region xy of
+        NW -> qt { tree = tree { nw = insert nw d } }
+        NE -> qt { tree = tree { ne = insert ne d } }
+        SW -> qt { tree = tree { sw = insert sw d } }
+        SE -> qt { tree = tree { se = insert se d } }
+
+query :: QTree a -> Bounds2D -> [(a, Point)]
+query qt@(Tree tree capacity region) box
+  | not (region `intersects` box) = []
+  | otherwise = case tree of
+    Leaf dat         -> [ d | d@(obj,xy) <- dat, box `contains` xy ]
+    Node nw ne sw se -> datNW ++ datNE ++ datSW ++ datSE
+      where
+      datNW = query nw box
+      datNE = query ne box
+      datSW = query sw box
+      datSE = query se box
+
+split :: QTree a -> QTree a
+split qt@(Tree tree capacity region) =
+  case tree of
+    Leaf dat
+      | length dat <= capacity -> qt
+      | otherwise              -> split $ insertAll (emptyNode capacity region) dat
+    Node nw ne sw se           -> qt { tree = Node nw' ne' sw' se' }
+      where
+      nw' = split nw
+      ne' = split ne
+      sw' = split sw
+      se' = split se
+
+subsume :: QTree a -> [(a, Point)]
+subsume (Tree tree _ _) =
+  case tree of
+    Leaf dat         -> dat
+    Node nw ne sw se -> datNW ++ datNE ++ datSW ++ datSE
+      where
+      datNW = subsume nw
+      datNE = subsume ne
+      datSW = subsume sw
+      datSE = subsume se
+
+
 
 insertAll :: QTree a -> [(a, Point)] -> QTree a
 insertAll qt []     = qt
 insertAll qt (d:ds) = insertAll (insert qt d) ds
 
 buildFrom :: Int -> Bounds2D -> [(a, Point)] -> QTree a
-buildFrom capacity region = insertAll (emptyLeaf capacity region)
-
-split :: QTree a -> QTree a
-split qt@(Tree (Leaf dat) capacity region)
-  | length dat <= capacity = qt
-  | otherwise              = split $ insertAll (emptyNode capacity region) dat
-split qt@(Tree (Node nw ne sw se) _ _) =
-  qt { tree = Node nw' ne' sw' se' }
-  where nw' = split nw
-        ne' = split ne
-        sw' = split sw
-        se' = split se
-
-subsume :: QTree a -> [(a, Point)]
-subsume (Tree (Leaf dat)         _ _) = dat
-subsume (Tree (Node nw ne sw se) _ _) = nwD ++ neD ++ swD ++ seD
-  where nwD = subsume nw
-        neD = subsume ne
-        swD = subsume sw
-        seD = subsume se
+buildFrom capacity region = split . insertAll (emptyLeaf capacity region)
 
 
--- query :: QTree a -> Bounds2D -> [(a, Point)]
--- query
-
-
-
-qtree :: QTree String
+qtree :: QTree Int
 qtree = buildFrom 10 box dat
   where box = ((0, 1), (0, 1))
-        dat = [("a",  (0.1, 0.85)),
-               ("b",  (0.2, 0.72)),
-               ("c0", (0.15, 0.8)),
-               ("c1", (0.15, 0.8)),
-               ("c2", (0.15, 0.8)),
-               ("c3", (0.15, 0.8)),
-               ("c4", (0.15, 0.8)),
-               ("c5", (0.15, 0.8)),
-               ("c6", (0.15, 0.8)),
-               ("c7", (0.15, 0.8)),
-               ("c8", (0.15, 0.8)),
-               ("c9", (0.15, 0.8)),
-               ("d",  (0.6, 0.38)),
-               ("e",  (0.4, 0.65)),
-               ("f",  (0.65, 0.9))]
+        dat = [(0, (0.1, 0.85)),
+               (1, (0.2, 0.72)),
+               (2, (0.15, 0.8)),
+               (3, (0.6, 0.38)),
+               (4, (0.4, 0.65)),
+               (5, (0.65, 0.9))]
