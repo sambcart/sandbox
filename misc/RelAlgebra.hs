@@ -3,11 +3,14 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE TypeInType #-}
+{-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE TypeFamilies #-}
 
 module RelAlgebra where
 
 -- See: http://www.philipzucker.com/a-short-skinny-on-relations-towards-the-algebra-of-programming/
 
+import qualified Data.Kind as Kind
 import qualified Data.List as List
 import Prelude hiding (Ordering(..), Ord(..))
 
@@ -104,42 +107,75 @@ instance (Eq a, Eq b, Finite a, Finite b) => HeytingAlgebra (Rel a b) where
 
 
 
+infixl 8 :&&
+infixl 8 :||
+infixl 7 :>>
 
-data Term = Lit Bool | And Term Term | Impl Term Term
+data Term = Lit Bool | (:&&) Term Term | (:||) Term Term | (:>>) Term Term
   deriving (Show, Eq)
 
-data Ctxt = Nil | Cons Term Ctxt
+data Ctxt = Nil | (:-) Term Ctxt
   deriving (Show, Eq)
 
-data Entails c t where
+infixr 6 :-
+infixr 5 |-
+infixr 5 :<=
+
+data (|-) c t where
+  Triv :: forall (c :: Ctxt).
+    c |- Lit True
+  Expl :: forall (c :: Ctxt) (t :: Term).
+    c |- Lit False ->
+    c |- t
   Var :: forall (c :: Ctxt) (t :: Term).
-     Entails (Cons t c) t
-
+    t :- c |- t
   Wkn :: forall (c :: Ctxt) (t :: Term) (u :: Term).
-    Entails c u ->
-    Entails (Cons t c) u
-
+    c |- u ->
+    t :- c |- u
   AndIntr :: forall (c :: Ctxt) (t :: Term) (u :: Term).
-    Entails c t ->
-    Entails c u ->
-    Entails c (And t u)
-
+    c |- t ->
+    c |- u ->
+    c |- t :&& u
   AndElim1 :: forall (c :: Ctxt) (t :: Term) (u :: Term).
-    Entails c (And t u) ->
-    Entails c t
-
+    c |- t :&& u ->
+    c |- t
   AndElim2 :: forall (c :: Ctxt) (t :: Term) (u :: Term).
-    Entails c (And t u) ->
-    Entails c u
-
+    c |- t :&& u ->
+    c |- u
+  OrIntr1 :: forall (c :: Ctxt) (t :: Term) (u :: Term).
+    c |- t ->
+    c |- t :|| u
+  OrIntr2 :: forall (c :: Ctxt) (t :: Term) (u :: Term).
+    c |- u ->
+    c |- t :|| u
+  OrElim :: forall (c :: Ctxt) (t :: Term) (u :: Term) (v :: Term).
+    c |- t :>> v ->
+    c |- u :>> v ->
+    c |- t :|| u ->
+    c |- v
   ImplIntr :: forall (c :: Ctxt) (t :: Term) (u :: Term).
-    Entails (Cons t c) u ->
-    Entails c (Impl t u)
-
+    t :- c |- u ->
+    c |- t :>> u
   ImplElim :: forall (c :: Ctxt) (t :: Term) (u :: Term).
-    Entails c (Impl t u) ->
-    Entails c t ->
-    Entails c u
+    c |- t :>> u ->
+    c |- t ->
+    c |- u
+
+data (:<=) c1 c2 where
+  ReflLE :: forall (c :: Ctxt).
+    c :<= c
+  ConsLE :: forall (c1 :: Ctxt) (c2 :: Ctxt) (t :: Term).
+    c1 :<= c2 ->
+    c1 :<= t :- c2
+
+transLE :: c1 :<= c2 -> c2 :<= c3 -> c1 :<= c3
+transLE u ReflLE      = u
+transLE u (ConsLE u1) = ConsLE (transLE u u1)
+
+weakenLE :: c1 :<= c2 -> c1 |- t -> c2 |- t
+weakenLE ReflLE     prf = prf
+weakenLE (ConsLE u) prf = Wkn (weakenLE u prf)
+
 
 
 
