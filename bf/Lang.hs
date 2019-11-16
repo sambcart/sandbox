@@ -1,145 +1,89 @@
 module Lang where
-
-import Control.Monad
 import Data.Char
-
+import Data.Word
+import qualified Data.Map as M
 
 data Operator
-  = OpenLoop | CloseLoop
-  | IncrPtr  | DecrPtr
-  | IncrVal  | DecrVal
-  | Output
-  deriving (Show, Eq)
+  = IncrPtr | DecrPtr
+  | IncrVal | DecrVal
+  | Input   | Output
+
+data Token
+  = OpenLoop
+  | CloseLoop
+  | Op Operator
 
 data Command
-  = Op Operator
-  | Loop [Command]
-  deriving (Show, Eq)
+  = Loop [Command]
+  | Cmd Operator
 
-
-tokenize :: String -> [Operator]
-tokenize = map tok1 . filter (`elem` "[]><+-,.")
+tokenize :: String -> [Token]
+tokenize = map chr2tok . filter (`elem` "[]<>-+,.")
   where
-  tok1 c = case c of
+  chr2tok c = case c of
     '[' -> OpenLoop
     ']' -> CloseLoop
-    '>' -> IncrPtr
-    '<' -> DecrPtr
-    '+' -> IncrVal
-    '-' -> DecrVal
-    '.' -> Output
+    '>' -> Op IncrPtr
+    '<' -> Op DecrPtr
+    '+' -> Op IncrVal
+    '-' -> Op DecrVal
+    ',' -> Op Input
+    '.' -> Op Output
 
-parseLoop :: [Operator] -> ([Command],[Command])
+parseLoop :: [Token] -> ([Command],[Command])
 parseLoop = go 0 []
   where
-  go _ l []     = error "Parse error: missing right-bracket."
-  go n l (c:cs) = case c of
+  go _ lp []     = error "Parse error: missing right-bracket."
+  go n lp (c:cs) = case c of
     CloseLoop
-      | n < 0     -> error "Parse error: off-balance brackets."
-      | n == 0    -> (parseCmds (reverse l), parseCmds cs)
-      | otherwise -> go (n - 1) (c:l) cs
-    OpenLoop      -> go (n + 1) (c:l) cs
-    _             -> go n (c:l) cs
+      | n <  0    -> error "Parse error: off-balance brackets."
+      | n == 0    -> (parseTokens (reverse lp), parseTokens cs)
+      | otherwise -> go (n - 1) (c:lp) cs
+    OpenLoop      -> go (n + 1) (c:lp) cs
+    _             -> go n (c:lp) cs
 
-parseCmds :: [Operator] -> [Command]
-parseCmds []     = []
-parseCmds (c:cs) = case c of
-  OpenLoop -> Loop l : cs' where (l,cs') = parseLoop cs
-  _        -> Op   c : cs' where cs' = parseCmds cs
+parseTokens :: [Token] -> [Command]
+parseTokens []     = []
+parseTokens (t:ts) = case t of
+  CloseLoop -> error "Parse error: extra right-bracket."
+  OpenLoop  -> Loop lp : cs where (lp,cs) = parseLoop ts
+  Op op     -> Cmd  op : cs where cs = parseTokens ts
 
-parse :: String -> [Command]
-parse = parseCmds . tokenize
+parseString :: String -> [Command]
+parseString = parseTokens . tokenize
 
-type MemArr a = ([a],a,[a])
-type MemState a = StateWriter (MemArr a) [a] a
+incr, decr :: Word8 -> Word8
+incr n = if n == 255 then 0 else n + 1
+decr n = if n == 0 then 255 else n - 1
 
-peekState :: MemState a
-peekState = SWriter $ \t@(_,a,_) -> (a, t, [])
+toString :: Word8 -> String
+toString = (:[]) . chr . fromIntegral
 
-runCmd :: (Eq a, Num a) => Command -> MemState a
-runCmd (Loop l) = runCmds l
-runCmd (Op c) = SWriter $ \t@(l,a,r) ->
-  case c of
-    IncrPtr ->
-      case r of
-        []  -> (0, (a:l, 0, []), [])
-        b:r -> (b, (a:l, b, r ), [])
-    DecrPtr ->
-      case l of
-        []  -> (0, ([], 0, a:r), [])
-        b:l -> (b, (l,  b, a:r), [])
-    IncrVal -> (a + 1, (l, a + 1, r), [])
-    DecrVal -> (a - 1, (l, a - 1, r), [])
-    Output  -> (a, t, [a])
+data Mem = Mem (M.Map Int Word8) Int
 
-runCmds :: (Eq a, Num a) => [Command] -> MemState a
-runCmds []     = peekState
-runCmds (c:cs) = case c of
-  Op   _ -> runCmd c >> runCmds cs
-  Loop l -> do
-    a <- peekState
-    if a == 0
-    then runCmds cs
-    else runCmds l >> runCmds (c:cs)
+shiftl, shiftr :: Mem -> Mem
+shiftl (Mem arr ptr) = Mem arr (ptr-1)
+shiftr (Mem arr ptr) = Mem arr (ptr+1)
 
-eval :: (Eq a, Num a) => [Command] -> (a, MemArr a, [a])
-eval = flip runSWriter emptyS . runCmds
-  where emptyS = ([],0,[])
+put :: Mem -> Word8 -> Mem
+put (Mem arr ptr) a = Mem (M.insert ptr a arr) ptr
 
-evalState :: (Eq a, Num a) => [Command] -> a
-evalState = fst . eval where fst (a,_,_) = a
+get :: Mem -> Word8
+get (Mem arr ptr) = maybe 0 id (M.lookup ptr arr)
 
-evalMem :: (Eq a, Num a) => [Command] -> MemArr a
-evalMem = snd . eval where snd (_,b,_) = b
+run :: String -> IO Mem
+run str = go (parseString str) (Mem M.empty 0)
+  where
+  go []     r = return r
+  go (c:cs) r = case c of
+    Loop lp -> if get r == 0
+      then go cs r
+      else go lp r >>= go (c:cs)
+    Cmd IncrPtr -> go cs (shiftr r)
+    Cmd DecrPtr -> go cs (shiftl r)
+    Cmd IncrVal -> let v = get r in go cs (put r $ incr v)
+    Cmd DecrVal -> let v = get r in go cs (put r $ decr v)
+    Cmd Input   -> read <$> getLine >>= go cs . put r
+    Cmd Output  -> putStr (toString $ get r) >> go cs r
 
-evalOutput :: (Eq a, Num a) => [Command] -> [a]
-evalOutput = thd . eval where thd (_,_,c) = c
-
-runOutput :: (Eq a, Num a) => String -> [a]
-runOutput = evalOutput . parse
-
-runString :: String -> String
-runString = map chr . runOutput
-
-runIO :: String -> IO ()
-runIO = putStr . runString
-
-
-newtype StateWriter s w a = SWriter { runSWriter :: s -> (a, s, w) }
-
-instance Functor (StateWriter s w) where
-  fmap f sw = SWriter $ \s -> f' (runSWriter sw s)
-    where f' (a, s, w) = (f a, s, w)
-
-instance Monoid w => Applicative (StateWriter s w) where
-  pure a = SWriter $ \s -> (a, s, mempty)
-  (<*>) sw0 sw1 = SWriter $ \s ->
-    let (f, s0, w0) = runSWriter sw0 s
-        (a, s1, w1) = runSWriter sw1 s0
-    in (f a, s1, w0 `mappend` w1)
-
-instance Monoid w => Monad (StateWriter s w) where
-  return = pure
-  (>>=) sw f = SWriter $ \s ->
-    let (a, s0, w0) = runSWriter sw s
-        (b, s1, w1) = runSWriter (f a) s0
-    in (b, s1, w0 `mappend` w1)
-
-
-helloWorld :: String
-helloWorld = "++++++++"
-          ++ "[>++++"
-          ++ "[>++>+++>+++>+<<<<-]"
-          ++ ">+>+>->>+[<]<-]"
-          ++ ">>."
-          ++ ">---."
-          ++ "+++++++.."
-          ++ "+++."
-          ++ ">>."
-          ++ "<-."
-          ++ "<."
-          ++ "+++."
-          ++ "------."
-          ++ "--------."
-          ++ ">>+."
-          ++ ">++."
+test = "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++."
