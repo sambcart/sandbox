@@ -1,16 +1,11 @@
 module Lang where
-import Data.Char
-import Data.Word
-import Data.Map (Map)
+
 import qualified Data.Map as Map
 
 data Operator
-  = IncrPtr
-  | DecrPtr
-  | IncrVal
-  | DecrVal
-  | Input
-  | Output
+  = IncrPtr | DecrPtr
+  | IncrVal | DecrVal
+  | Input   | Output
 
 data Token
   = OpenLoop
@@ -21,8 +16,10 @@ data Command
   = Loop [Command]
   | Cmd Operator
 
+data Mem a = Mem (Map.Map Int a) Int
+
 tokenize :: String -> [Token]
-tokenize = map chr2tok . filter (flip elem "[]<>-+,.")
+tokenize str = [chr2tok c | c <- str, c `elem` "[]<>-+,."]
   where chr2tok c = case c of
           { '[' -> OpenLoop   ; ']' -> CloseLoop
           ; '>' -> Op IncrPtr ; '<' -> Op DecrPtr
@@ -39,12 +36,28 @@ parse (t:ts) = case t of
     where (lp,ts') = go 0 [] ts
           go _ lp []     = error "Parse error: missing right-bracket(s)."
           go n lp (t:ts) = case t of
-            CloseLoop
-              | n <  0    -> error "Parse error: off-balance bracket(s)."
-              | n == 0    -> (parse $ reverse lp, ts)
-              | otherwise -> go (n - 1) (t:lp) ts
+            CloseLoop | n <  0    -> error "Parse error: off-balance bracket(s)."
+                      | n == 0    -> (parse $ reverse lp, ts)
+                      | otherwise -> go (n - 1) (t:lp) ts
             OpenLoop -> go (n + 1) (t:lp) ts
             Op _     -> go n (t:lp) ts
+
+run :: (Read a, Sym a) => String -> IO (Mem a)
+run = go (Mem Map.empty 0) . parse . tokenize
+  where shiftl (Mem arr ptr) = Mem arr (ptr - 1)
+        shiftr (Mem arr ptr) = Mem arr (ptr + 1)
+        put (Mem arr ptr) a = Mem (Map.insert ptr a arr) ptr
+        get (Mem arr ptr) = maybe empty id (Map.lookup ptr arr)
+        go m []     = return m
+        go m (c:cs) = case c of
+          Cmd IncrPtr -> go (shiftr m) cs
+          Cmd DecrPtr -> go (shiftl m) cs
+          Cmd IncrVal -> go (put m $ incr $ get m) cs
+          Cmd DecrVal -> go (put m $ decr $ get m) cs
+          Cmd Input   -> getLine >>= flip go cs . put m . read
+          Cmd Output  -> putStr (toString $ get m) >> go m cs
+          Loop lp | get m == empty -> go m cs
+                  | otherwise      -> go m lp >>= flip go (c:cs)
 
 class (Bounded a, Enum a, Eq a) => Sym a where
   toString :: a -> String
@@ -53,33 +66,3 @@ class (Bounded a, Enum a, Eq a) => Sym a where
   decr a = if a == minBound then maxBound else pred a
   empty :: a
   empty = minBound
-
-instance Sym Word8 where
-  toString n = [chr (fromIntegral n)]
-
-data Mem a = Mem (Map Int a) Int
-
-shiftl, shiftr :: Mem a -> Mem a
-shiftl (Mem arr ptr) = Mem arr (ptr - 1)
-shiftr (Mem arr ptr) = Mem arr (ptr + 1)
-
-put :: Sym a => Mem a -> a -> Mem a
-put (Mem arr ptr) a = Mem (Map.insert ptr a arr) ptr
-
-get :: Sym a => Mem a -> a
-get (Mem arr ptr) = maybe empty id (Map.lookup ptr arr)
-
-run :: (Read a, Sym a) => String -> IO (Mem a)
-run = go (Mem Map.empty 0) . parse . tokenize
-  where go m []     = return m
-        go m (c:cs) = case c of
-          Cmd IncrPtr -> go (shiftr m) cs
-          Cmd DecrPtr -> go (shiftl m) cs
-          Cmd IncrVal -> go (put m $ incr $ get m) cs
-          Cmd DecrVal -> go (put m $ decr $ get m) cs
-          Cmd Input   -> getLine >>= flip go cs . put m .read
-          Cmd Output  -> putStr (toString $ get m) >> go m cs
-          Loop lp | get m == empty -> go m cs
-                  | otherwise      -> go m lp >>= flip go (c:cs)
-
-test = "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++."
