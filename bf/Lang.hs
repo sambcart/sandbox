@@ -32,15 +32,15 @@ parse []     = []
 parse (t:ts) = case t of
   Op op     -> Cmd op : parse ts
   CloseLoop -> error "Parse error: extra right-bracket(s)."
-  OpenLoop  -> Loop lp : parse ts'
+  OpenLoop  -> Loop (parse lp) : parse ts'
     where (lp,ts') = go 0 [] ts
           go _ lp []     = error "Parse error: missing right-bracket(s)."
           go n lp (t:ts) = case t of
-            CloseLoop | n <  0    -> error "Parse error: off-balance bracket(s)."
-                      | n == 0    -> (parse $ reverse lp, ts)
-                      | otherwise -> go (n - 1) (t:lp) ts
-            OpenLoop -> go (n + 1) (t:lp) ts
             Op _     -> go n (t:lp) ts
+            OpenLoop -> go (n + 1) (t:lp) ts
+            CloseLoop | n <  0    -> error "Parse error: off-balance bracket(s)."
+                      | n == 0    -> (reverse lp, ts)
+                      | otherwise -> go (n - 1) (t:lp) ts
 
 run :: (Read a, Sym a) => String -> IO (Mem a)
 run = go (Mem Map.empty 0) . parse . tokenize
