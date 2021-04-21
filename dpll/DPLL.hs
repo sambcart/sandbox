@@ -5,7 +5,7 @@ module DPLL where
 
 import Control.Monad
 import Control.Monad.Trans.Writer
-import Data.Maybe    (catMaybes)
+import Data.Maybe    (mapMaybe)
 import Data.Foldable (foldrM)
 import Data.Function (on)
 import Data.List     (nub, unionBy)
@@ -20,7 +20,7 @@ type DPLL sym        = WriterT (Model sym) Maybe (CNF sym)
 data Sign = Neg | Pos
   deriving (Show, Eq)
 
-data Model sym = Model { runModel :: [Constraint sym] }
+newtype Model sym = Model { runModel :: [Constraint sym] }
   deriving (Show)
 
 
@@ -30,10 +30,10 @@ satisfy cnf = execWriterT $ dpll (symbols cnf) cnf
 dpll :: Eq sym => [sym] -> CNF sym -> DPLL sym
 dpll _    []  = success
 dpll syms cnf = do
-  cnf1 <- propagateUnits cnf
-  cnf2 <- eliminatePures syms cnf1
-  msum [ chooseNextFalse syms cnf2
-       , chooseNextTrue syms cnf2
+  cnf'  <- propagateUnits cnf
+  cnf'' <- eliminatePures syms cnf'
+  msum [ chooseNextFalse syms cnf''
+       , chooseNextTrue syms cnf''
        ]
 
 
@@ -59,19 +59,25 @@ removeSymbol :: Eq sym => sym -> Clause sym -> Clause sym
 removeSymbol sym = filter ((/= sym) . fst)
 
 signsIn :: Eq sym => sym -> CNF sym -> [Sign]
-signsIn sym = catMaybes . map (lookup sym)
+signsIn sym = mapMaybe (lookup sym)
 
 literals :: Eq sym => [sym] -> CNF sym -> [(sym, [Sign])]
 literals syms cnf = [(sym, signsIn sym cnf) | sym <- syms]
 
 pureLiterals :: Eq sym => [sym] -> CNF sym -> Model sym
-pureLiterals syms cnf = Model $ map toConstraint $ do
+pureLiterals syms cnf = Model $ do
   (sym, signs) <- literals syms cnf
-  guard (length signs == 1)
-  return (sym, head signs)
+  guard (isSingleton signs)
+  return (sym, toBool (head signs))
 
 unitClauses :: Eq sym => CNF sym -> Model sym
-unitClauses = Model . map toConstraint . concat . filter ((== 1) . length)
+unitClauses cnf = Model $ do
+  [(sym, sign)] <- filter isSingleton cnf
+  return (sym, toBool sign)
+
+isSingleton :: [a] -> Bool
+isSingleton = (== 1) . length
+
 
 propagateUnits :: Eq sym => CNF sym -> DPLL sym
 propagateUnits cnf = cnf `evalWith` unitClauses cnf
@@ -116,7 +122,8 @@ evalWith cnf model = WriterT $ (, model) <$> foldrM applyConstraint cnf (runMode
 
 
 instance Eq sym => Semigroup (Model sym) where
-  Model l <> Model r = Model (unionBy ((==) `on` fst) l r)
+  Model l <> Model r = Model (unionBy eq l r)
+    where eq = (==) `on` fst
 
 instance Eq sym => Monoid (Model sym) where
   mempty = Model []
