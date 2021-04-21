@@ -24,10 +24,10 @@ data Model sym = Model { runModel :: [Constraint sym] }
   deriving (Show)
 
 
-satisfy :: Ord sym => CNF sym -> Maybe (Model sym)
+satisfy :: Eq sym => CNF sym -> Maybe (Model sym)
 satisfy cnf = execWriterT $ dpll (symbols cnf) cnf
 
-dpll :: Ord sym => [sym] -> CNF sym -> DPLL sym
+dpll :: Eq sym => [sym] -> CNF sym -> DPLL sym
 dpll _    []  = success
 dpll syms cnf = do
   cnf1 <- propagateUnits cnf
@@ -37,42 +37,58 @@ dpll syms cnf = do
        ]
 
 
--- satisfy exampleCNF
--- >>> Just [(1,True),(4,True),(2,True),(3,True)]
+toConstraint :: Literal sym -> Constraint sym
+toConstraint (sym, sign) = (sym, toBool sign)
 
-exampleCNF :: CNF Int
-exampleCNF =
-  [ [ neg 1, pos 2, pos 3 ]
-  , [ pos 1, pos 3, pos 4 ]
-  , [ pos 1, pos 3, neg 4 ]
-  , [ pos 1, neg 3, pos 4 ]
-  , [ pos 1, neg 3, neg 4 ]
-  , [ neg 2, neg 3, pos 4 ]
-  , [ neg 1, pos 2, neg 3 ]
-  , [ neg 1, neg 2, pos 3 ]
-  ]
+toBool :: Sign -> Bool
+toBool Neg = False
+toBool Pos = True
 
+true, false :: sym -> Constraint sym
+true  = (, True)
+false = (, False)
 
-evalCNF :: Ord sym => CNF sym -> Model sym -> DPLL sym
-evalCNF cnf model = WriterT $ (, model) <$> foldrM applyConstraint cnf (runModel model)
+pos, neg :: sym -> Literal sym
+pos = (, Pos)
+neg = (, Neg)
 
-propagateUnits :: Ord sym => CNF sym -> DPLL sym
-propagateUnits cnf = evalCNF cnf $ unitClauses cnf
+symbols :: Eq sym => CNF sym -> [sym]
+symbols = nub . map fst . concat
 
-eliminatePures :: Ord sym => [sym] -> CNF sym -> DPLL sym
-eliminatePures syms cnf = evalCNF cnf $ pureLiterals syms cnf
+removeSymbol :: Eq sym => sym -> Clause sym -> Clause sym
+removeSymbol sym = filter ((/= sym) . fst)
 
-chooseNextFalse :: Ord sym => [sym] -> CNF sym -> DPLL sym
-chooseNextFalse (sym:syms) cnf = evalCNF cnf (Model [false sym]) >>= dpll syms
+signsIn :: Eq sym => sym -> CNF sym -> [Sign]
+signsIn sym = catMaybes . map (lookup sym)
+
+literals :: Eq sym => [sym] -> CNF sym -> [(sym, [Sign])]
+literals syms cnf = [(sym, signsIn sym cnf) | sym <- syms]
+
+pureLiterals :: Eq sym => [sym] -> CNF sym -> Model sym
+pureLiterals syms cnf = Model $ map toConstraint $ do
+  (sym, signs) <- literals syms cnf
+  guard (length signs == 1)
+  return (sym, head signs)
+
+unitClauses :: Eq sym => CNF sym -> Model sym
+unitClauses = Model . map toConstraint . concat . filter ((== 1) . length)
+
+propagateUnits :: Eq sym => CNF sym -> DPLL sym
+propagateUnits cnf = cnf `evalWith` unitClauses cnf
+
+eliminatePures :: Eq sym => [sym] -> CNF sym -> DPLL sym
+eliminatePures syms cnf = cnf `evalWith` pureLiterals syms cnf
+
+chooseNextFalse :: Eq sym => [sym] -> CNF sym -> DPLL sym
+chooseNextFalse (sym:syms) cnf = (cnf `evalWithConstraint` false sym) >>= dpll syms
 chooseNextFalse []         cnf = success
 
-chooseNextTrue :: Ord sym => [sym] -> CNF sym -> DPLL sym
-chooseNextTrue (sym:syms) cnf = evalCNF cnf (Model [true sym]) >>= dpll syms
+chooseNextTrue :: Eq sym => [sym] -> CNF sym -> DPLL sym
+chooseNextTrue (sym:syms) cnf = (cnf `evalWithConstraint` true sym) >>= dpll syms
 chooseNextTrue []         cnf = success
 
-success, failure :: Ord sym => DPLL sym
+success :: Eq sym => DPLL sym
 success = return []
-failure = mzero
 
 
 applyConstraintIn :: Eq sym => Constraint sym -> Clause sym -> Maybe (Clause sym)
@@ -92,43 +108,11 @@ applyConstraint constraint (clause:cnf) =
       | otherwise   -> (result:) <$> applyConstraint constraint cnf
     Nothing         -> applyConstraint constraint cnf
 
+evalWithConstraint :: Eq sym => CNF sym -> Constraint sym -> DPLL sym
+evalWithConstraint cnf constraint = cnf `evalWith` Model [constraint]
 
-toConstraint :: Literal sym -> Constraint sym
-toConstraint (sym, sign) = (sym, toBool sign)
-
-toBool :: Sign -> Bool
-toBool Neg = False
-toBool Pos = True
-
-true, false :: sym -> Constraint sym
-true  = (, True)
-false = (, False)
-
-pos, neg :: sym -> Literal sym
-pos = (, Pos)
-neg = (, Neg)
-
-
-symbols :: Eq sym => CNF sym -> [sym]
-symbols = nub . map fst . concat
-
-removeSymbol :: Eq sym => sym -> Clause sym -> Clause sym
-removeSymbol sym = filter ((/= sym) . fst)
-
-signsIn :: Eq sym => sym -> CNF sym -> [Sign]
-signsIn sym = catMaybes . map (lookup sym)
-
-literals :: Ord sym => [sym] -> CNF sym -> [(sym, [Sign])]
-literals syms cnf = [(sym, signsIn sym cnf) | sym <- syms]
-
-pureLiterals :: Ord sym => [sym] -> CNF sym -> Model sym
-pureLiterals syms cnf = Model $ map toConstraint $ do
-  (sym, signs) <- literals syms cnf
-  guard (length signs == 1)
-  return (sym, head signs)
-
-unitClauses :: Eq sym => CNF sym -> Model sym
-unitClauses = Model . map toConstraint . concat . filter ((== 1) . length)
+evalWith :: Eq sym => CNF sym -> Model sym -> DPLL sym
+evalWith cnf model = WriterT $ (, model) <$> foldrM applyConstraint cnf (runModel model)
 
 
 instance Eq sym => Semigroup (Model sym) where
@@ -136,4 +120,20 @@ instance Eq sym => Semigroup (Model sym) where
 
 instance Eq sym => Monoid (Model sym) where
   mempty = Model []
+
+
+-- satisfy exampleCNF
+-- >>> Just [(1,True),(4,True),(2,True),(3,True)]
+
+exampleCNF :: CNF Int
+exampleCNF =
+  [ [ neg 1, pos 2, pos 3 ]
+  , [ pos 1, pos 3, pos 4 ]
+  , [ pos 1, pos 3, neg 4 ]
+  , [ pos 1, neg 3, pos 4 ]
+  , [ pos 1, neg 3, neg 4 ]
+  , [ neg 2, neg 3, pos 4 ]
+  , [ neg 1, pos 2, neg 3 ]
+  , [ neg 1, neg 2, pos 3 ]
+  ]
 
