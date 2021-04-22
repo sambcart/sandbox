@@ -3,7 +3,6 @@
 module Main where
 
 import Control.Monad       ( forM, replicateM )
-import Data.Ix             ( range )
 import Data.Maybe          ( catMaybes )
 import System.Environment  ( getArgs )
 import System.Exit         ( ExitCode(..), exitSuccess, exitWith )
@@ -21,7 +20,7 @@ randomMaybeBool = go <$> randomRIO (-1, 1 :: Int)
 
 randomClause :: Int -> IO (Clause Int)
 randomClause symbolNum = catMaybes <$> forM symbols go
-  where symbols = range (1, symbolNum)
+  where symbols = [1 .. symbolNum]
         go sym = fmap (fmap (sym,)) randomMaybeBool
 
 randomCNF :: Int -> Int -> IO (CNF Int)
